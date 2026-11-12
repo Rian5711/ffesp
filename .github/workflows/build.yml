@@ -1,1 +1,256 @@
 
+name: build
+on: [push, workflow_dispatch]
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: gerar projeto
+        run: |
+          mkdir -p app/src/main/java/ffesp
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "ffesp"
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+            namespace 'ffesp'
+            compileSdk 34
+            defaultConfig {
+              applicationId 'ffesp.draw'
+              minSdk 26
+              targetSdk 34
+              versionCode 1
+              versionName '1.0'
+            }
+            compileOptions {
+              sourceCompatibility JavaVersion.VERSION_17
+              targetCompatibility JavaVersion.VERSION_17
+            }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+            <uses-permission android:name="android.permission.INTERNET"/>
+            <application android:label="FFESP" android:theme="@android:style/Theme.DeviceDefault">
+              <activity android:name=".MainActivity" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN"/>
+                  <category android:name="android.intent.category.LAUNCHER"/>
+                </intent-filter>
+              </activity>
+              <service android:name=".OverlayService"
+                       android:exported="false"
+                       android:foregroundServiceType="specialUse">
+                <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="overlay esp"/>
+              </service>
+            </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/ffesp/MainActivity.java <<'EOF'
+          package ffesp;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.widget.*;
+
+          public class MainActivity extends Activity {
+            protected void onCreate(Bundle b) {
+              super.onCreate(b);
+              LinearLayout l = new LinearLayout(this);
+              l.setOrientation(LinearLayout.VERTICAL);
+              l.setPadding(48, 96, 48, 48);
+
+              TextView t = new TextView(this);
+              t.setTextSize(16);
+              t.setText("FF ESP\n\n1) Permita sobrepor outros apps\n2) Inicie o leitor no Termux com root\n3) Toque em LIGAR\n4) Abra o Free Fire");
+              l.addView(t);
+
+              Button p = new Button(this);
+              p.setText("1 - Permitir sobreposicao");
+              p.setOnClickListener(v -> startActivity(new Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + getPackageName()))));
+              l.addView(p);
+
+              Button s = new Button(this);
+              s.setText("2 - LIGAR ESP");
+              s.setOnClickListener(v -> {
+                if (!Settings.canDrawOverlays(this)) {
+                  Toast.makeText(this, "Permita a sobreposicao primeiro", Toast.LENGTH_SHORT).show();
+                  return;
+                }
+                startForegroundService(new Intent(this, OverlayService.class));
+                Toast.makeText(this, "ESP ligado", Toast.LENGTH_SHORT).show();
+              });
+              l.addView(s);
+
+              Button e = new Button(this);
+              e.setText("3 - DESLIGAR");
+              e.setOnClickListener(v -> stopService(new Intent(this, OverlayService.class)));
+              l.addView(e);
+
+              setContentView(l);
+            }
+          }
+          EOF
+
+          cat > app/src/main/java/ffesp/OverlayView.java <<'EOF'
+          package ffesp;
+          import android.content.Context;
+          import android.graphics.*;
+          import android.view.View;
+          import org.json.*;
+
+          public class OverlayView extends View {
+            private volatile JSONArray data = new JSONArray();
+            private final Paint box = new Paint();
+            private final Paint bar = new Paint();
+            private final Paint txt = new Paint();
+
+            public OverlayView(Context c) {
+              super(c);
+              box.setStyle(Paint.Style.STROKE);
+              box.setStrokeWidth(4f);
+              box.setAntiAlias(true);
+              txt.setAntiAlias(true);
+              txt.setTextSize(30f);
+              txt.setTypeface(Typeface.MONOSPACE);
+              bar.setStyle(Paint.Style.FILL);
+            }
+
+            public void set(JSONArray a) {
+              data = a;
+              postInvalidateOnAnimation();
+            }
+
+            protected void onDraw(Canvas c) {
+              JSONArray d = data;
+              int W = getWidth(), H = getHeight();
+              for (int i = 0; i < d.length(); i++) {
+                JSONObject o = d.optJSONObject(i);
+                if (o == null) continue;
+                float x = (float) o.optDouble("x") * W;
+                float y = (float) o.optDouble("y") * H;
+                float w = (float) o.optDouble("w") * W;
+                float h = (float) o.optDouble("h") * H;
+                if (h < 4) continue;
+                int col = o.optBoolean("ally") ? 0xFF37D67A : 0xFFFF3B3B;
+                box.setColor(col);
+                c.drawRect(x, y, x + w, y + h, box);
+                c.drawLine(x, y - 5, x + w, y - 5, box);
+                int hp = o.optInt("hp");
+                float hpw = w * Math.min(hp, 100) / 100f;
+                bar.setColor(0x99000000);
+                c.drawRect(x, y - 14, x + w, y - 9, bar);
+                bar.setColor(col);
+                c.drawRect(x, y - 14, x + hpw, y - 9, bar);
+                txt.setColor(col);
+                c.drawText(hp + "hp " + o.optInt("dist") + "m", x, y - 20, txt);
+              }
+            }
+          }
+          EOF
+
+          cat > app/src/main/java/ffesp/OverlayService.java <<'EOF'
+          package ffesp;
+          import android.app.*;
+          import android.content.Intent;
+          import android.graphics.PixelFormat;
+          import android.os.*;
+          import android.view.*;
+          import java.net.*;
+          import org.json.*;
+
+          public class OverlayService extends Service {
+            private WindowManager wm;
+            private OverlayView view;
+
+            public IBinder onBind(Intent i) { return null; }
+
+            public void onCreate() {
+              super.onCreate();
+              NotificationChannel ch = new NotificationChannel("esp", "ESP",
+                NotificationManager.IMPORTANCE_LOW);
+              getSystemService(NotificationManager.class).createNotificationChannel(ch);
+              Notification n = new Notification.Builder(this, "esp")
+                .setContentTitle("ESP ativo")
+                .setSmallIcon(android.R.drawable.ic_menu_view)
+                .build();
+              startForeground(1, n);
+
+              wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+              view = new OverlayView(this);
+              WindowManager.LayoutParams p = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                  | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                  | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                  | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT);
+              p.gravity = Gravity.TOP | Gravity.START;
+              wm.addView(view, p);
+              escutar();
+            }
+
+            private void escutar() {
+              new Thread(() -> {
+                try {
+                  DatagramSocket s = new DatagramSocket(5555);
+                  byte[] buf = new byte[65535];
+                  while (true) {
+                    DatagramPacket pk = new DatagramPacket(buf, buf.length);
+                    s.receive(pk);
+                    String j = new String(buf, 0, pk.getLength());
+                    try {
+                      view.set(new JSONArray(j));
+                    } catch (Exception ignored) {}
+                  }
+                } catch (Exception ignored) {}
+              }).start();
+            }
+
+            public void onDestroy() {
+              if (view != null && wm != null) wm.removeView(view);
+              super.onDestroy();
+            }
+          }
+          EOF
+
+      - name: compilar
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffesp-apk
+          path: app/build/outputs/apk/debug/*.apk
